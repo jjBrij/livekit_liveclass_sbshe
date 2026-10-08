@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SBSHE Live Class Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: #0e1116; color: #e8eaed; }
+    header { padding: 12px 16px; background: #161a20; border-bottom: 1px solid #232830; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 16px; margin: 0; }
+    header .status { font-size: 12px; color: #9aa4b2; }
+    .setup { padding: 16px; max-width: 900px; margin: 0 auto; display: grid; gap: 10px; }
+    .setup input { width: 100%; padding: 8px 10px; background: #0e1116; border: 1px solid #2a2f38; color: #e8eaed; border-radius: 6px; }
+    .setup button { padding: 10px 16px; border-radius: 8px; border: 0; background: #2f7af5; color: white; cursor: pointer; font-weight: 600; }
+    .setup button:disabled { opacity: .5; cursor: not-allowed; }
+    .layout { display: grid; grid-template-columns: 1fr 340px; height: calc(100vh - 60px); }
+    .stage { padding: 12px; overflow: auto; display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-content: start; }
+    .tile { position: relative; background: #10141a; border: 1px solid #1f242c; border-radius: 10px; overflow: hidden; aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; }
+    .tile video { width: 100%; height: 100%; object-fit: cover; background: black; }
+    .tile .label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,.6); padding: 2px 8px; border-radius: 6px; font-size: 12px; }
+    .side { border-left: 1px solid #232830; background: #12161c; display: flex; flex-direction: column; min-height: 0; }
+    .side h2 { font-size: 13px; margin: 0; padding: 10px 14px; border-bottom: 1px solid #232830; text-transform: uppercase; letter-spacing: .06em; color: #9aa4b2; }
+    .chat { flex: 1; overflow: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+    .chat .msg { font-size: 13px; line-height: 1.35; }
+    .chat .msg .name { color: #7fa4ff; font-weight: 600; margin-right: 6px; }
+    .chat .msg.teacher_only .name::after { content: " (only teacher)"; color: #e1b955; font-weight: 400; }
+    .chat .msg .body { color: #d7dbe0; }
+    .composer { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid #232830; }
+    .composer input { flex: 1; padding: 8px 10px; background: #0e1116; border: 1px solid #2a2f38; color: #e8eaed; border-radius: 6px; }
+    .composer button { border: 0; background: #2f7af5; color: white; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+    .controls { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid #232830; flex-wrap: wrap; }
+    .controls button { border: 1px solid #2a2f38; background: #161a20; color: #e8eaed; border-radius: 6px; padding: 8px 10px; cursor: pointer; font-size: 12px; }
+    .controls button.active { background: #2f7af5; border-color: #2f7af5; }
+    .hands { padding: 10px 14px; border-top: 1px solid #232830; font-size: 12px; color: #9aa4b2; }
+    .hands .row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+    .hands .row button { font-size: 11px; padding: 4px 8px; border-radius: 6px; border: 1px solid #2a2f38; background: #161a20; color: #e8eaed; cursor: pointer; margin-left: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SBSHE Live Class Demo</h1>
+    <div class="status" id="status">Not connected</div>
+  </header>
+
+  <section class="setup" id="setup">
+    <label>Class ID <input id="classId" placeholder="3" value="3"></label>
+    <label>Your role
+      <select id="role" style="width:100%; padding:8px 10px; background:#0e1116; border:1px solid #2a2f38; color:#e8eaed; border-radius:6px;">
+        <option value="teacher">teacher</option>
+        <option value="student">student</option>
+      </select>
+    </label>
+    <label>Auth Server token (JWT from /api/auth/...) <input id="authToken" placeholder="paste teacher or student JWT here"></label>
+    <button id="joinBtn">Join class</button>
+    <div style="font-size:12px; color:#9aa4b2;">
+      This page calls <code>/api/classes/{id}/join/</code> with your token, then connects to LiveKit and to the WebSocket.
+    </div>
+  </section>
+
+  <div class="layout" id="layout" style="display:none;">
+    <div class="stage" id="stage"></div>
+    <aside class="side">
+      <h2>Chat</h2>
+      <div class="chat" id="chat"></div>
+      <div class="composer">
+        <input id="chatInput" placeholder="Message">
+        <button id="chatSend">Send</button>
+      </div>
+
+      <h2>Hands</h2>
+      <div class="hands" id="hands">Nobody raised a hand.</div>
+
+      <h2>Controls</h2>
+      <div class="controls">
+        <button id="btnMic">Mic</button>
+        <button id="btnCam">Camera</button>
+        <button id="btnShare">Share screen</button>
+        <button id="btnRaise">Raise hand</button>
+        <button id="btnLeave">Leave</button>
+      </div>
+    </aside>
+  </div>
+
+  <script type="module">
+    import {
+      Room, RoomEvent, Track, createLocalTracks,
+    } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.6.2/dist/livekit-client.esm.mjs';
+
+    // --- page state ---
+    const state = {
+      classId: null,
+      role: null,
+      authToken: null,
+      accessToken: null,     // livekit JWT
+      livekitUrl: null,
+      room: null,
+      ws: null,
+      localParticipantIdentity: null,
+      localTracks: { mic: null, camera: null, screen: null },
+      users: new Map(),       // identity -> { role, name }
+      handsRaised: new Map(), // user_id -> payload
+      heartbeatTimer: null,
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    // --- helpers ---
+    const setStatus = (text) => { $('status').textContent = text; };
+
+    const apiBase = 'http://127.0.0.1:8000';
+    const wsBase  = 'ws://127.0.0.1:8000';
+
+    async function api(path, opts = {}) {
+      const res = await fetch(apiBase + path, {
+        ...opts,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${state.authToken}`,
+          ...(opts.headers || {}),
+        },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = body?.error?.code || body?.detail || `HTTP ${res.status}`;
+        throw new Error(err);
+      }
+      return body;
+    }
+
+    // --- tile rendering ---
+    function upsertTile(identity, { name, role, kind = 'camera', track, muted = false, isLocal = false } = {}) {
+      const tileId = `tile-${identity}-${kind}`;
+      let tile = document.getElementById(tileId);
+      if (!tile) {
+        tile = document.createElement('div');
+        tile.className = 'tile';
+        tile.id = tileId;
+        const video = document.createElement('video');
+        video.autoplay = true;
+        video.playsInline = true;
+        video.muted = isLocal;    // avoid self-echo
+        tile.appendChild(video);
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.textContent = `${name || identity} · ${role || '?'}${kind === 'screen' ? ' · screen' : ''}`;
+        tile.appendChild(label);
+        $('stage').appendChild(tile);
+      }
+      const video = tile.querySelector('video');
+      if (track) {
+        const media = track.attach ? track.attach() : track;
+        if (media && video.srcObject !== media.srcObject) {
+          video.srcObject = media.srcObject || null;
+          if (media.srcObject === undefined) {
+            // Some track types return an HTMLMediaElement we should append
+            // (handled by LiveKit via .attach()); nothing more here.
+          }
+        }
+      }
+      if (muted) video.muted = true;
+      return tile;
+    }
+
+    function removeTile(identity, kind) {
+      const tile = document.getElementById(`tile-${identity}-${kind}`);
+      if (tile) tile.remove();
+    }
+
+    // --- LiveKit connect ---
+    async function connectLiveKit() {
+      const room = new Room({ adaptiveStream: true, dynacast: true });
+      state.room = room;
+
+      room
+        .on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+          const role = state.users.get(participant.identity)?.role || 'student';
+          const kind = track.source === Track.Source.ScreenShare ? 'screen' : 'camera';
+          upsertTile(participant.identity, {
+            name: participant.name || participant.identity,
+            role,
+            kind,
+            track,
+          });
+        })
+        .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+          const kind = track.source === Track.Source.ScreenShare ? 'screen' : 'camera';
+          removeTile(participant.identity, kind);
+        })
+        .on(RoomEvent.ParticipantDisconnected, (participant) => {
+          removeTile(participant.identity, 'camera');
+          removeTile(participant.identity, 'screen');
+          state.users.delete(participant.identity);
+        })
+        .on(RoomEvent.Disconnected, () => {
+          setStatus('Disconnected from LiveKit');
+        });
+
+      await room.connect(state.livekitUrl, state.accessToken);
+      state.localParticipantIdentity = room.localParticipant.identity;
+      state.users.set(room.localParticipant.identity, {
+        role: state.role,
+        name: room.localParticipant.name || room.localParticipant.identity,
+      });
+
+      // Publish local tracks: mic + camera.
+      try {
+        const tracks = await createLocalTracks({ audio: true, video: true });
+        for (const t of tracks) {
+          await room.localParticipant.publishTrack(t);
+          if (t.kind === 'audio') state.localTracks.mic = t;
+          if (t.kind === 'video') state.localTracks.camera = t;
+        }
+        upsertTile(room.localParticipant.identity, {
+          name: room.localParticipant.name || room.localParticipant.identity,
+          role: state.role,
+          kind: 'camera',
+          track: state.localTracks.camera,
+          isLocal: true,
+        });
+        $('btnMic').classList.add('active');
+        $('btnCam').classList.add('active');
+      } catch (err) {
+        console.warn('local tracks failed:', err);
+      }
+    }
+
+    // --- WebSocket connect ---
+    function connectWs() {
+      const url = `${wsBase}/ws/classes/${state.classId}/?token=${encodeURIComponent(state.authToken)}`;
+      const ws = new WebSocket(url);
+      state.ws = ws;
+
+      ws.onopen = () => {
+        setStatus('Connected to class');
+        state.heartbeatTimer = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'heartbeat' }));
+        }, 15000);
+      };
+      ws.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+        handleWsMessage(msg);
+      };
+      ws.onclose = () => {
+        setStatus('WebSocket closed');
+        clearInterval(state.heartbeatTimer);
+      };
+      ws.onerror = () => { setStatus('WebSocket error'); };
+    }
+
+    function handleWsMessage(msg) {
+      switch (msg.type) {
+        case 'server.hello':
+          state.users.set(
+            `${msg.data.user.role}-${msg.data.user.user_id}`,
+            { role: msg.data.user.role, name: msg.data.user.name }
+          );
+          break;
+
+        case 'chat.message':
+          renderChat(msg.data);
+          break;
+
+        case 'chat.message_deleted':
+          // Remove the message from the DOM by id.
+          document.querySelectorAll(`[data-msg-id="${msg.data.id}"]`).forEach(e => e.remove());
+          break;
+
+        case 'hand_raised':
+          state.handsRaised.set(msg.data.user_id, msg.data);
+          renderHands();
+          break;
+
+        case 'hand_lowered':
+          state.handsRaised.delete(msg.data.user_id);
+          renderHands();
+          break;
+
+        case 'hand_accepted':
+          if (msg.data.user_id === Number(currentUserId())) {
+            setStatus('Your hand was accepted — you may speak');
+          }
+          break;
+
+        case 'hand_rejected':
+          if (msg.data.user_id === Number(currentUserId())) {
+            setStatus(`Your hand was rejected: ${msg.data.reason || ''}`);
+          }
+          break;
+
+        case 'participant.muted':
+        case 'participant.mic_enabled':
+        case 'participant.camera_disabled':
+        case 'participant.camera_enabled':
+        case 'participant.removed':
+        case 'class.ended':
+        case 'recording.started':
+        case 'recording.stopped':
+        case 'recording.completed':
+        case 'recording.failed':
+          // Optional UI feedback
+          setStatus(`${msg.type}: ${JSON.stringify(msg.data)}`);
+          break;
+
+        case 'participant.joined':
+        case 'participant.left':
+          state.users.set(
+            `${msg.data.role}-${msg.data.user_id}`,
+            { role: msg.data.role, name: msg.data.name }
+          );
+          break;
+
+        case 'error':
+          setStatus(`Error: ${msg.error.code} — ${msg.error.message}`);
+          break;
+
+        default:
+          // Ignore unknown events
+          break;
+      }
+    }
+
+    function currentUserId() {
+      // server.hello carries the user_id; store it on first hello.
+      if (!state._userId) {
+        // Deferred: parse from server.hello (below).
+      }
+      return state._userId ?? '';
+    }
+
+    function renderChat(m) {
+      const el = document.createElement('div');
+      el.className = `msg ${m.visibility === 'teacher_only' ? 'teacher_only' : ''}`;
+      el.dataset.msgId = m.id;
+      el.innerHTML = `<span class="name">${m.name}</span><span class="body"></span>`;
+      el.querySelector('.body').textContent = m.text;
+      $('chat').appendChild(el);
+      $('chat').scrollTop = $('chat').scrollHeight;
+    }
+
+    function renderHands() {
+      const container = $('hands');
+      if (state.handsRaised.size === 0) {
+        container.textContent = 'Nobody raised a hand.';
+        return;
+      }
+      container.innerHTML = '';
+      for (const [userId, payload] of state.handsRaised) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = `<span>${payload.name} (user ${userId})</span>`;
+        const accept = document.createElement('button');
+        accept.textContent = 'Accept';
+        accept.onclick = () => api(`/api/classes/${state.classId}/hands/${userId}/accept/`, { method: 'POST' });
+        const reject = document.createElement('button');
+        reject.textContent = 'Reject';
+        reject.onclick = () => {
+          const reason = prompt('Reason (optional):', 'Please wait') || '';
+          api(`/api/classes/${state.classId}/hands/${userId}/reject/`, {
+            method: 'POST',
+            body: JSON.stringify({ reason }),
+          });
+        };
+        row.appendChild(accept);
+        row.appendChild(reject);
+        container.appendChild(row);
+      }
+    }
+
+    // --- UI wiring ---
+    $('joinBtn').onclick = async () => {
+      try {
+        $('joinBtn').disabled = true;
+        state.classId = Number($('classId').value);
+        state.role = $('role').value;
+        state.authToken = $('authToken').value.trim();
+
+        setStatus('Joining…');
+        const join = await api(`/api/classes/${state.classId}/join/`, { method: 'POST' });
+
+        state.accessToken = join.data.token;
+        state.livekitUrl = join.data.livekit_url;
+        state._userId = join.data.participant.user_id;
+
+        $('setup').style.display = 'none';
+        $('layout').style.display = 'grid';
+
+        await connectLiveKit();
+        connectWs();
+      } catch (err) {
+        setStatus(`Failed: ${err.message}`);
+        $('joinBtn').disabled = false;
+      }
+    };
+
+    $('chatSend').onclick = () => {
+      const text = $('chatInput').value.trim();
+      if (!text || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+      state.ws.send(JSON.stringify({ type: 'chat.send', data: { text } }));
+      $('chatInput').value = '';
+    };
+    $('chatInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') $('chatSend').click();
+    });
+
+    $('btnMic').onclick = async () => {
+      const t = state.localTracks.mic;
+      if (!t) return;
+      const enabled = t.isMuted === false;
+      if (enabled) { await t.mute(); $('btnMic').classList.remove('active'); }
+      else { await t.unmute(); $('btnMic').classList.add('active'); }
+    };
+
+    $('btnCam').onclick = async () => {
+      const t = state.localTracks.camera;
+      if (!t) return;
+      const enabled = t.isMuted === false;
+      if (enabled) { await t.mute(); $('btnCam').classList.remove('active'); }
+      else { await t.unmute(); $('btnCam').classList.add('active'); }
+    };
+
+    $('btnShare').onclick = async () => {
+      if (!state.room) return;
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        const [videoTrack] = stream.getVideoTracks();
+        const { LocalVideoTrack } = await import('https://cdn.jsdelivr.net/npm/livekit-client@2.6.2/dist/livekit-client.esm.mjs');
+        const lkTrack = new LocalVideoTrack(videoTrack);
+        await state.room.localParticipant.publishTrack(lkTrack, { source: 'screen_share' });
+        upsertTile(state.room.localParticipant.identity, {
+          name: 'You (screen)',
+          role: state.role,
+          kind: 'screen',
+          track: lkTrack,
+          isLocal: true,
+        });
+      } catch (err) {
+        console.warn('screen share failed:', err);
+      }
+    };
+
+    $('btnRaise').onclick = () => {
+      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+      state.ws.send(JSON.stringify({ type: 'raise_hand' }));
+      $('btnRaise').classList.add('active');
+    };
+
+    $('btnLeave').onclick = async () => {
+      try {
+        await api(`/api/classes/${state.classId}/leave/`, { method: 'POST' });
+      } catch (err) { console.warn(err); }
+      if (state.room) state.room.disconnect();
+      if (state.ws) state.ws.close();
+      setStatus('Left the class');
+      $('layout').style.display = 'none';
+      $('setup').style.display = 'grid';
+      $('joinBtn').disabled = false;
+    };
+  </script>
+</body>
+</html>

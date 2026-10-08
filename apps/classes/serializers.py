@@ -8,6 +8,8 @@ from .models import LiveClass, LiveClassStatus
 from .models import Attendance
 from .models import ClassMessage  
 from .models import ClassRecording 
+import logging
+from django.conf import settings
 # ---------------------------------------------------------------------------
 # Read
 # ---------------------------------------------------------------------------
@@ -41,15 +43,6 @@ MAX_SCHEDULE_AHEAD_DAYS = 365
 
 
 class _BaseWriteSerializer(serializers.Serializer):
-    """
-    Shared validation for create and update.
-
-    We do NOT subclass ModelSerializer here because:
-      - teacher_id / teacher_name come from request.user, not the body
-      - status, room_name, started_at, ended_at are lifecycle-managed
-      - We want tight control over what the client may send
-    """
-
     title = serializers.CharField(max_length=255)
     description = serializers.CharField(
         required=False, allow_blank=True, default=""
@@ -86,13 +79,6 @@ class LiveClassCreateSerializer(_BaseWriteSerializer):
 
 
 class LiveClassUpdateSerializer(serializers.Serializer):
-    """
-    Input serializer for PATCH /api/classes/{id}/.
-
-    Every field is optional. Only the fields present in the request
-    are validated and applied.
-    """
-
     title = serializers.CharField(max_length=255, required=False)
     description = serializers.CharField(
         required=False, allow_blank=True
@@ -134,13 +120,6 @@ class LiveClassUpdateSerializer(serializers.Serializer):
 # LiveKit token request (Block 7)
 # ---------------------------------------------------------------------------
 class LiveKitTokenRequestSerializer(serializers.Serializer):
-    """
-    Optional body for POST /api/classes/{id}/token/.
-
-    Currently all fields are optional and ignored by the view.
-    Reserved for Block 8 (reconnect hints) and Block 24 (client telemetry).
-    """
-
     client_info = serializers.DictField(required=False)
 
     def validate_client_info(self, value):
@@ -193,12 +172,6 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
 
 class MyAttendanceSerializer(serializers.ModelSerializer):
-    """
-    Serializer for GET /api/attendance/me/.
-
-    Adds a few fields from the related class so a student can build a
-    history view without extra requests.
-    """
     class_id = serializers.IntegerField(source="live_class.id", read_only=True)
     class_title = serializers.CharField(source="live_class.title", read_only=True)
     scheduled_at = serializers.DateTimeField(source="live_class.scheduled_at", read_only=True)
@@ -272,3 +245,60 @@ class RecordingSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = fields        
+
+class RecordingSerializer(serializers.ModelSerializer):
+    """
+    Serializer for ClassRecording.
+
+    `playback_url` is only populated when the caller passes
+    `include_playback=True` in the serializer context AND the recording
+    is completed. It is never read from the DB column (that column is
+    effectively dead). See Block 15 docstring note.
+    """
+
+    class_id = serializers.IntegerField(source="live_class_id", read_only=True)
+    playback_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassRecording
+        fields = (
+            "id",
+            "class_id",
+            "status",
+            "egress_id",
+            "layout",
+            "started_at",
+            "stopped_at",
+            "duration_seconds",
+            "file_size_bytes",
+            "error_message",
+            "playback_url",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_playback_url(self, obj):
+        include = self.context.get("include_playback", False)
+        if not include:
+            return None
+
+        from apps.classes.models import RecordingStatus
+        from apps.livekit import storage as s3_storage
+
+        if obj.status != RecordingStatus.COMPLETED or not obj.storage_key:
+            return None
+
+        ttl = self.context.get("playback_ttl", settings.S3_PRESIGNED_URL_TTL_SECONDS)
+        try:
+            url, _ = s3_storage.generate_presigned_get_url(
+                key=obj.storage_key,
+                ttl_seconds=ttl,
+                bucket=obj.bucket or settings.S3_BUCKET,
+            )
+            return url
+        except Exception:
+            # Never fail the whole list because one presign failed.
+            logger = logging.getLogger(__name__)
+            logger.exception("Presign failed for recording %s", obj.id)
+            return None        

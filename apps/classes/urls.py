@@ -23,6 +23,7 @@ from .views import (
      class_hands,
     class_hand_accept,
     class_hand_reject,
+    recording_playback_url,
 
 )
 
@@ -51,7 +52,11 @@ urlpatterns = [
     path("<int:class_id>/recording/stop/", recording_stop, name="recording-stop"),
     path("<int:class_id>/recording/", recording_current, name="recording-current"),
     path("<int:class_id>/recordings/", recording_list, name="recording-list"),
-
+    path("<int:class_id>/recordings/<int:recording_id>/playback-url/",recording_playback_url,name="recording-playback-url"),
+            
+        
+        
+    
         # Block 11 — raise hand
     path("<int:class_id>/hands/", class_hands, name="class-hands"),
     path("<int:class_id>/hands/<int:user_id>/accept/", class_hand_accept, name="class-hand-accept"),

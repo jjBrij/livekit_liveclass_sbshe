@@ -1,18 +1,14 @@
-"""
-LiveKit admin/debug endpoints.
 
-These are NOT the join endpoints. Join is in Block 8.
-"""
 
 import logging
-
 from rest_framework.decorators import api_view
 from rest_framework.exceptions import PermissionDenied
-
 from apps.core.responses import success, error
-
 from . import service
-
+from rest_framework.exceptions import PermissionDenied
+from . import storage as s3_storage
+from .storage import S3ConfigurationError, S3ServiceError
+from django.conf import settings
 logger = logging.getLogger(__name__)
 
 from .webhooks import egress_webhook as _egress_webhook
@@ -80,4 +76,42 @@ def livekit_list_rooms(request):
     return success(
         data={"rooms": data, "total": len(data)},
         message="LiveKit rooms fetched",
+    )
+
+
+@api_view(["GET"])
+def s3_ping(request):
+    """
+    Verify Django can reach the configured S3 bucket.
+
+    Teacher-only. Useful during deployment and troubleshooting.
+    """
+    if not getattr(request.user, "is_teacher", False):
+        raise PermissionDenied("Teacher role required.")
+
+    try:
+        result = s3_storage.head_bucket()
+    except S3ConfigurationError as exc:
+        return error(
+            code="S3_NOT_CONFIGURED",
+            message="S3 is not configured on the server.",
+            status=500,
+            details={"reason": str(exc)},
+        )
+    except S3ServiceError as exc:
+        return error(
+            code="S3_UNREACHABLE",
+            message="S3 bucket is not reachable.",
+            status=502,
+            details={"reason": str(exc)},
+        )
+
+    return success(
+        data={
+            "bucket": settings.S3_BUCKET,
+            "region": settings.S3_REGION,
+            "endpoint": settings.S3_ENDPOINT_URL,
+            **result,
+        },
+        message="S3 bucket is reachable",
     )

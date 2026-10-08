@@ -1,0 +1,19 @@
+
+api_key: devkey
+api_secret: secret
+
+ws_url: ws://host.docker.internal:7880
+
+redis:
+  address: redis:6379
+
+s3:
+  access_key: ${S3_ACCESS_KEY}
+  secret: ${S3_SECRET_KEY}
+  region: ${S3_REGION}
+  bucket: ${S3_BUCKET}
+  endpoint: ""
+  force_path_style: false
+
+  
+log_level: info

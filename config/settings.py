@@ -189,6 +189,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "")
 
 
 LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "")
+LIVEKIT_API_URL = os.environ.get("LIVEKIT_API_URL", "")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
 LIVEKIT_TOKEN_TTL_SECONDS = int(os.environ.get("LIVEKIT_TOKEN_TTL_SECONDS", 6 * 60 * 60))
@@ -201,7 +202,10 @@ def _derive_livekit_http_url(ws_url: str) -> str:
         return "http://" + ws_url[len("ws://"):]
     return ws_url
 
-LIVEKIT_HTTP_URL = _derive_livekit_http_url(LIVEKIT_URL)
+LIVEKIT_HTTP_URL = (
+    LIVEKIT_API_URL
+    or _derive_livekit_http_url(LIVEKIT_URL)
+)
 ASGI_APPLICATION = "config.asgi.application"
 CHANNEL_LAYERS = {
     "default": {

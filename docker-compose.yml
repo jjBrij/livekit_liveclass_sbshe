@@ -29,6 +29,37 @@ services:
     image: redis:7
     ports:
       - "6379:6379"
+  livekit:
+     image: livekit/livekit-server:latest
+     command: --config /etc/livekit.yaml
+     volumes:
+       - ./livekit.yaml:/etc/livekit.yaml:ro
+     ports:
+       - "7880:7880"
+       - "7881:7881"
+       - "50000-50100:50000-50100/udp"
+     depends_on:
+       - redis
+     restart: unless-stopped  
+           
+
+  egress:
+    image: livekit/egress:latest
+   # network_mode: host
+
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./egress.yaml:/etc/egress.yaml:ro
+    depends_on:
+      - livekit
+      - redis
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  
+      
 
 volumes:
   pgdata:

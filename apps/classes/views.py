@@ -50,6 +50,8 @@ from apps.livekit.service import LiveKitServiceError as LKServiceError
 from .models import ClassRecording, RecordingStatus
 from .serializers import RecordingSerializer
 from apps.livekit.service import LiveKitConfigurationError as LKConfigError
+from apps.livekit import storage as s3_storage
+from apps.livekit.storage import S3ConfigurationError, S3ServiceError
 
 
 class ClassNotEditable(APIException):
@@ -1135,6 +1137,17 @@ def recording_stop(request, class_id: int):
     try:
         livekit_service.stop_egress(recording.egress_id)
     except LKServiceError as exc:
+        msg = str(exc)
+        if "failed_precondition" in msg or "cannot be stopped" in msg:
+            recording.status = RecordingStatus.FAILED
+            recording.stopped_at = recording.stopped_at or timezone.now()
+            recording.error_message = msg[:2000]
+            recording.save(update_fields=["status", "stopped_at", "error_message"])
+            return success(
+                data=RecordingSerializer(recording).data,
+                message="Recording had already ended on the media server.",
+            )  
+
         return error(
             code="LIVEKIT_UPSTREAM_ERROR",
             message="Could not stop recording.",
@@ -1215,4 +1228,113 @@ def recording_list(request, class_id: int):
     return success(
         data={"results": serializer.data, "pagination": pagination},
         message="Recordings fetched",
+    )
+
+
+
+@api_view(["GET"])
+def recording_list(request, class_id: int):
+    try:
+        cls = LiveClass.objects.get(pk=class_id)
+    except LiveClass.DoesNotExist:
+        raise NotFound("Class not found.")
+
+    if not _can_view_recordings(request.user, cls):
+        raise PermissionDenied("You do not have access to this class.")
+
+    include_playback = request.query_params.get("include_playback", "false").lower() in ("1", "true", "yes")
+
+    try:
+        ttl = int(request.query_params.get("ttl", settings.S3_PRESIGNED_URL_TTL_SECONDS))
+    except (TypeError, ValueError):
+        ttl = settings.S3_PRESIGNED_URL_TTL_SECONDS
+
+    qs = ClassRecording.objects.filter(live_class=cls).order_by("-started_at")
+    results, pagination = _paginate(request, qs)
+
+    serializer = RecordingSerializer(
+        results,
+        many=True,
+        context={
+            "include_playback": include_playback,
+            "playback_ttl": ttl,
+        },
+    )
+
+    return success(
+        data={"results": serializer.data, "pagination": pagination},
+        message="Recordings fetched",
+    )
+
+
+
+# ---------------------------------------------------------------------------
+# Playback URL for a single recording
+# ---------------------------------------------------------------------------
+@api_view(["GET"])
+def recording_playback_url(request, class_id: int, recording_id: int):
+    try:
+        cls = LiveClass.objects.get(pk=class_id)
+    except LiveClass.DoesNotExist:
+        raise NotFound("Class not found.")
+
+    if not _can_view_recordings(request.user, cls):
+        raise PermissionDenied("You do not have access to this class.")
+
+    try:
+        recording = ClassRecording.objects.get(pk=recording_id, live_class=cls)
+    except ClassRecording.DoesNotExist:
+        raise NotFound("Recording not found.")
+
+    if recording.status != RecordingStatus.COMPLETED:
+        return error(
+            code="RECORDING_NOT_COMPLETED",
+            message=f"Recording is not completed (status={recording.status}).",
+            status=409,
+        )
+
+    if not recording.storage_key:
+        return error(
+            code="RECORDING_MISSING_STORAGE_KEY",
+            message="Recording is marked completed but has no storage key.",
+            status=409,
+        )
+
+    try:
+        ttl = int(request.query_params.get("ttl", settings.S3_PRESIGNED_URL_TTL_SECONDS))
+    except (TypeError, ValueError):
+        ttl = settings.S3_PRESIGNED_URL_TTL_SECONDS
+    ttl = max(60, min(ttl, 86400))
+
+    try:
+        url, expires_at = s3_storage.generate_presigned_get_url(
+            key=recording.storage_key,
+            ttl_seconds=ttl,
+            bucket=recording.bucket or settings.S3_BUCKET,
+        )
+    except S3ConfigurationError as exc:
+        return error(
+            code="S3_NOT_CONFIGURED",
+            message="S3 is not configured on the server.",
+            status=500,
+            details={"reason": str(exc)},
+        )
+    except S3ServiceError as exc:
+        return error(
+            code="S3_UPSTREAM_ERROR",
+            message="Could not generate a playback URL.",
+            status=502,
+            details={"reason": str(exc)},
+        )
+
+    return success(
+        data={
+            "recording_id": recording.id,
+            "class_id": cls.id,
+            "status": recording.status,
+            "playback_url": url,
+            "expires_in_seconds": ttl,
+            "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+        },
+        message="Playback URL generated",
     )

@@ -339,12 +339,7 @@ class RecordingStatus(models.TextChoices):
 
 
 class ClassRecording(models.Model):
-    """
-    Metadata for one recording of a class.
-
-    The video file itself lives in S3-compatible storage (uploaded by
-    LiveKit Egress). This model stores only the orchestration facts.
-    """
+    
 
     live_class = models.ForeignKey(
         LiveClass,

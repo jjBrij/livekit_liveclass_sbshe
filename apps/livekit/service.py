@@ -1,13 +1,3 @@
-"""
-LiveKit server-side service.
-
-Wraps the livekit-api SDK so views don't need to know about
-AccessToken, LiveKitAPI, or asyncio details.
-
-Two responsibilities:
-    1. Mint participant tokens (JWTs) that clients use to connect.
-    2. Manage rooms and participants via the LiveKit server API.
-"""
 
 import asyncio
 import logging
@@ -372,16 +362,10 @@ def ping() -> dict:
 # Track and participant operations
 # ---------------------------------------------------------------------------
 async def _list_participants_async(room_name: str):
-    _require_config()
-    async with lk_api.LiveKitAPI(
-        url=settings.LIVEKIT_HTTP_URL,
-        api_key=settings.LIVEKIT_API_KEY,
-        api_secret=settings.LIVEKIT_API_SECRET,
-    ) as lkapi:
+    async with _lk_api() as lkapi:
         request = lk_api.ListParticipantsRequest(room=room_name)
         response = await lkapi.room.list_participants(request)
         return response.participants
-
 
 async def _mute_track_async(*, room_name: str, identity: str, track_sid: str, muted: bool):
     _require_config()
@@ -477,20 +461,14 @@ async def _start_room_composite_egress_async(
     _require_config()
     _require_s3_config()
 
-    async with lk_api.LiveKitAPI(
-        url=settings.LIVEKIT_HTTP_URL,
-        api_key=settings.LIVEKIT_API_KEY,
-        api_secret=settings.LIVEKIT_API_SECRET,
-    ) as lkapi:
-        # S3 output config. The LiveKit server uses these credentials; Django
-        # only passes them along. The same values are used by Egress to upload.
+    async with _lk_api() as lkapi:
         s3 = lk_api.S3Upload(
             access_key=settings.S3_ACCESS_KEY,
             secret=settings.S3_SECRET_KEY,
-            region=settings.S3_REGION or None,
+            region=settings.S3_REGION,
             bucket=settings.S3_BUCKET,
-            endpoint=settings.S3_ENDPOINT_URL or None,
-            force_path_style=bool(settings.S3_ENDPOINT_URL),  # for MinIO/R2
+            endpoint=settings.S3_ENDPOINT_URL or "",
+            force_path_style=bool(settings.S3_ENDPOINT_URL),
         )
 
         file_output = lk_api.EncodedFileOutput(
@@ -500,8 +478,6 @@ async def _start_room_composite_egress_async(
         )
 
         if audio_only:
-            # AudioOnly uses a separate request type; we keep only video-enabled
-            # composites in this block. Audio-only is reserved for future use.
             raise LiveKitConfigurationError("Audio-only recording is not enabled yet.")
 
         request = lk_api.RoomCompositeEgressRequest(
@@ -511,21 +487,13 @@ async def _start_room_composite_egress_async(
             video_only=False,
             file_outputs=[file_output],
         )
-
         return await lkapi.egress.start_room_composite_egress(request)
 
-
 async def _stop_egress_async(egress_id: str):
-    _require_config()
-    async with lk_api.LiveKitAPI(
-        url=settings.LIVEKIT_HTTP_URL,
-        api_key=settings.LIVEKIT_API_KEY,
-        api_secret=settings.LIVEKIT_API_SECRET,
-    ) as lkapi:
+    async with _lk_api() as lkapi:
         return await lkapi.egress.stop_egress(
             lk_api.StopEgressRequest(egress_id=egress_id)
         )
-
 
 def start_room_composite_egress(
     *,

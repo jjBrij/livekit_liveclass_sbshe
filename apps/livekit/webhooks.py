@@ -1,13 +1,3 @@
-"""
-LiveKit webhook handlers.
-
-LiveKit sends events to our webhook URL with a signed token in the
-Authorization header. We verify the signature using the same API
-secret used to mint tokens.
-
-Currently handles Egress events only. Additional webhook types (room
-events, participant events) are added in later blocks if needed.
-"""
 
 import json
 import logging
@@ -18,7 +8,6 @@ from django.http import HttpResponse, HttpResponseBadRequest
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
-
 from apps.classes.models import ClassRecording, RecordingStatus
 from apps.realtime.broadcast import broadcast_class_event
 
@@ -29,23 +18,22 @@ logger = logging.getLogger(__name__)
 # Signature verification
 # ---------------------------------------------------------------------------
 def _verify_webhook(auth_header: str, body: bytes) -> dict | None:
-    """
-    Verify a LiveKit webhook and return the parsed payload, or None.
-
-    The SDK exposes WebhookReceiver; we prefer it. Fall back to a
-    structural check only in dev if the SDK lacks the receiver.
-    """
-    token = ""
-    if auth_header and auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
+    
+    raw = (auth_header or "").strip()
+    if raw.lower().startswith("bearer "):
+        token = raw[7:].strip()
+    else:
+        token = raw    
 
     try:
         from livekit import api as lk_api
-        receiver = lk_api.WebhookReceiver(
-            settings.LIVEKIT_API_KEY,
-            settings.LIVEKIT_API_SECRET,
+        verifier = lk_api.TokenVerifier(
+            api_key=settings.LIVEKIT_API_KEY,
+            api_secret=settings.LIVEKIT_API_SECRET,
         )
+        receiver = lk_api.WebhookReceiver(verifier)
         event = receiver.receive(body.decode("utf-8"), token)
+       
         return event
     except ImportError:
         logger.error("livekit.api.WebhookReceiver not available")
@@ -78,6 +66,7 @@ def _parse_dt(value):
 @require_POST
 def egress_webhook(request):
     auth_header = request.META.get("HTTP_AUTHORIZATION", "")
+    logger.warning("DEBUG webhook auth_header=%r body_len=%d", auth_header[:80], len(request.body or b""))
     body = request.body or b""
 
     event = _verify_webhook(auth_header, body)
